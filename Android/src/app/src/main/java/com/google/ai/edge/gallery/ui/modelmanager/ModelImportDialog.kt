@@ -77,6 +77,7 @@ import com.google.ai.edge.gallery.data.NumberSliderConfig
 import com.google.ai.edge.gallery.data.SegmentedButtonConfig
 import com.google.ai.edge.gallery.data.ValueType
 import com.google.ai.edge.gallery.data.convertValueToTargetType
+import com.google.ai.edge.gallery.flags.FeatureFlags
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.LlmConfig
 import com.google.ai.edge.gallery.ui.common.ConfigEditorsPanel
@@ -94,7 +95,8 @@ private const val TAG = "AGModelImportDialog"
 
 private val SUPPORTED_ACCELERATORS: List<Accelerator> =
   if (isPixel10()) {
-    listOf(Accelerator.CPU)
+    val accelerators = mutableListOf(Accelerator.CPU)
+    accelerators.toList()
   } else {
     listOf(Accelerator.CPU, Accelerator.GPU, Accelerator.NPU)
   }
@@ -136,6 +138,7 @@ private val IMPORT_CONFIGS_LLM: List<Config> =
     BooleanSwitchConfig(key = ConfigKeys.SUPPORT_TINY_GARDEN, defaultValue = false),
     BooleanSwitchConfig(key = ConfigKeys.SUPPORT_MOBILE_ACTIONS, defaultValue = false),
     BooleanSwitchConfig(key = ConfigKeys.SUPPORT_THINKING, defaultValue = false),
+    BooleanSwitchConfig(key = ConfigKeys.SUPPORT_SPECULATIVE_DECODING, defaultValue = false),
     SegmentedButtonConfig(
       key = ConfigKeys.COMPATIBLE_ACCELERATORS,
       defaultValue = SUPPORTED_ACCELERATORS[0].label,
@@ -278,6 +281,12 @@ fun ModelImportDialog(
                   valueType = ValueType.BOOLEAN,
                 )
                   as Boolean
+              val supportSpeculativeDecoding =
+                convertValueToTargetType(
+                  value = values.get(ConfigKeys.SUPPORT_SPECULATIVE_DECODING.label)!!,
+                  valueType = ValueType.BOOLEAN,
+                )
+                  as Boolean
               val importedModel: ImportedModel =
                 ImportedModel.newBuilder()
                   .setFileName(fileName)
@@ -294,6 +303,7 @@ fun ModelImportDialog(
                       .setSupportMobileActions(supportMobileActions)
                       .setSupportThinking(supportThinking)
                       .setSupportTinyGarden(supportTinyGarden)
+                      .setSupportSpeculativeDecoding(supportSpeculativeDecoding)
                       .build()
                   )
                   .build()
