@@ -73,8 +73,8 @@ class LocalApiServer(
         Log.i("LocalApiServer", "Server started on port $port")
     }
 
-    fun stop() {
-        server?.stop(1000, 2000)
+    fun stop(gracePeriodMillis: Long = 1000, timeoutMillis: Long = 2000) {
+        server?.stop(gracePeriodMillis, timeoutMillis)
         server = null
         Log.i("LocalApiServer", "Server stopped")
     }

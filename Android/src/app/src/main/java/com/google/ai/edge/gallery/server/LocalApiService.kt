@@ -212,7 +212,7 @@ class LocalApiService : Service() {
                             model.runtimeHelper.initialize(
                                 context = applicationContext,
                                 model = model,
-                                supportImage = true,
+                                supportImage = model.llmSupportImage,
                                 supportAudio = false,
                                 onDone = { error -> initError = error }
                             )
