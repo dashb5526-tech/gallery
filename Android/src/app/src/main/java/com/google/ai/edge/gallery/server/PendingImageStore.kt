@@ -8,15 +8,15 @@ import android.graphics.Bitmap
  * this avoids the OOM crash from base64-encoding large images in JSON.
  */
 object PendingImageStore {
-    private var pendingImage: Bitmap? = null
+    private var pendingBytes: ByteArray? = null
 
-    fun set(image: Bitmap?) {
-        pendingImage = image
+    fun set(bytes: ByteArray?) {
+        pendingBytes = bytes
     }
 
-    fun take(): Bitmap? {
-        val img = pendingImage
-        pendingImage = null
-        return img
+    fun take(): ByteArray? {
+        val b = pendingBytes
+        pendingBytes = null
+        return b
     }
 }

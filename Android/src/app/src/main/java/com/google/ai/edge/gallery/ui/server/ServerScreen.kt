@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -55,18 +56,22 @@ import com.google.ai.edge.gallery.server.PendingImageStore
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class ChatMessage(val role: String, val content: String, val imageBitmap: Bitmap? = null)
+import androidx.compose.ui.graphics.ImageBitmap
+
+data class ChatMessage(val role: String, val content: String, val imageBitmap: ImageBitmap? = null)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -272,9 +277,10 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
     val context = LocalContext.current
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var inputText by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
+    var loadingStatus by remember { mutableStateOf<String?>(null) }
     var currentJob by remember { mutableStateOf<Job?>(null) }
     var attachedImage by remember { mutableStateOf<Bitmap?>(null) }
+    val focusManager = LocalFocusManager.current
     val activeConnection = remember { mutableStateOf<HttpURLConnection?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -324,7 +330,7 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
     Column(modifier = modifier.imePadding()) {
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
-            if (messages.isEmpty() && !isLoading) {
+            if (messages.isEmpty() && loadingStatus == null) {
                 item {
                     Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.AutoMirrored.Rounded.Chat, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
@@ -336,12 +342,12 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
                 }
             }
             items(messages) { ChatBubble(it) }
-            if (isLoading) {
+            if (loadingStatus != null) {
                 item {
                     Row(Modifier.padding(start = 8.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text("Generating…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                        Text(loadingStatus!!, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                     }
                 }
             }
@@ -364,21 +370,21 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
         Surface(tonalElevation = 3.dp, shadowElevation = 4.dp, modifier = Modifier.fillMaxWidth()) {
             Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp).navigationBarsPadding(), verticalAlignment = Alignment.CenterVertically) {
                 // Image attach button
-                IconButton(onClick = { imagePicker.launch("image/*") }, enabled = !isLoading) {
+                IconButton(onClick = { imagePicker.launch("image/*") }, enabled = loadingStatus == null) {
                     Icon(Icons.Rounded.Image, "Attach image", tint = MaterialTheme.colorScheme.primary)
                 }
                 OutlinedTextField(value = inputText, onValueChange = { inputText = it }, modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type a message…") }, shape = RoundedCornerShape(24.dp), maxLines = 4, enabled = !isLoading,
+                    placeholder = { Text("Type a message…") }, shape = RoundedCornerShape(24.dp), maxLines = 4, enabled = loadingStatus == null,
                     singleLine = false,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default))
                 Spacer(Modifier.width(4.dp))
-                if (isLoading) {
+                if (loadingStatus != null) {
                     // Stop button — disconnect the HTTP connection to break the stream
                     FilledIconButton(onClick = {
                         activeConnection.value?.let { try { it.disconnect() } catch (_: Exception) {} }
                         activeConnection.value = null
                         currentJob?.cancel()
-                        isLoading = false
+                        loadingStatus = null
                     },
                         shape = CircleShape, modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.error)) {
@@ -389,8 +395,15 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
                     FilledIconButton(onClick = {
                         if (inputText.isNotBlank() || attachedImage != null) {
                             val msg = inputText.trim(); val img = attachedImage; inputText = ""; attachedImage = null
+                            focusManager.clearFocus()
                             currentJob = scope.launch {
-                                sendTestMessage(msg, img, port, apiKey, modelName, messages, activeConnection, { isLoading = it }) { scope.launch { listState.animateScrollToItem(messages.size) } }
+                                sendTestMessage(msg, img, port, apiKey, modelName, messages, activeConnection, { loadingStatus = it }, { focusManager.clearFocus() }) { 
+                                    scope.launch { 
+                                        // Scroll to the very end (messages + 1 for loading status)
+                                        val target = if (loadingStatus != null) messages.size else messages.size - 1
+                                        if (target >= 0) listState.animateScrollToItem(target) 
+                                    } 
+                                }
                             }
                         }
                     }, enabled = inputText.isNotBlank() || attachedImage != null, shape = CircleShape, modifier = Modifier.size(48.dp)) {
@@ -403,8 +416,36 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
 }
 
 private suspend fun sendTestMessage(userText: String, image: Bitmap?, port: String, apiKey: String, modelName: String,
-    messages: MutableList<ChatMessage>, activeConnection: MutableState<HttpURLConnection?>, setLoading: (Boolean) -> Unit, scrollToBottom: () -> Unit) {
-    messages.add(ChatMessage("user", userText.ifBlank { if (image != null) "(Image)" else "" }, imageBitmap = image)); scrollToBottom(); setLoading(true)
+    messages: MutableList<ChatMessage>, activeConnection: MutableState<HttpURLConnection?>, setLoading: (String?) -> Unit, clearFocus: () -> Unit, scrollToBottom: () -> Unit) {
+    
+    // 1. Add user message IMMEDIATELY to UI
+    withContext(Dispatchers.Main) {
+        messages.add(ChatMessage("user", userText.ifBlank { if (image != null) "(Image)" else "" }, imageBitmap = image?.asImageBitmap()))
+        scrollToBottom()
+    }
+    
+    // 2. Clear focus/keyboard IMMEDIATELY
+    clearFocus()
+
+    var imageBytes: ByteArray? = null
+    
+    // 3. Image-specific processing (with 2s delay)
+    if (image != null) {
+        // Wait 2 seconds for images as requested
+        delay(2000)
+        
+        setLoading("Compressing image...")
+        scrollToBottom()
+        withContext(Dispatchers.Default) {
+            val stream = ByteArrayOutputStream()
+            image.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+            imageBytes = stream.toByteArray()
+        }
+    }
+
+    // 4. API Generation (Immediate for text, after 2s for images)
+    setLoading("Generating response...")
+    scrollToBottom()
     // Capture history BEFORE adding the empty assistant placeholder
     val history = messages.toList().dropLast(1) // exclude the user msg we just added
     val assistantIndex = messages.size
@@ -414,7 +455,7 @@ private suspend fun sendTestMessage(userText: String, image: Bitmap?, port: Stri
     try {
         withContext(Dispatchers.IO) {
             val buffer = StringBuilder()
-            streamLocalApi(userText, image, port, apiKey, modelName, activeConnection, history) { chunk ->
+            streamLocalApi(userText, imageBytes, port, apiKey, modelName, activeConnection, history) { chunk ->
                 buffer.append(chunk)
                 val now = System.currentTimeMillis()
                 // Flush buffer to UI at most every 50ms to avoid per-token main-thread hops
@@ -452,15 +493,15 @@ private suspend fun sendTestMessage(userText: String, image: Bitmap?, port: Stri
         }
     }
     activeConnection.value = null
-    setLoading(false); scrollToBottom()
+    setLoading(null); scrollToBottom()
 }
 
-private suspend fun streamLocalApi(userText: String, image: Bitmap?, port: String, apiKey: String, modelName: String,
+private suspend fun streamLocalApi(userText: String, imageBytes: ByteArray?, port: String, apiKey: String, modelName: String,
     activeConnection: MutableState<HttpURLConnection?>, chatHistory: List<ChatMessage>, onChunk: suspend (String) -> Unit) {
 
-    // Image already scaled to 512px at pick time — just store directly
-    if (image != null) {
-        PendingImageStore.set(image)
+    // Use pre-compressed bytes
+    if (imageBytes != null) {
+        PendingImageStore.set(imageBytes)
     }
 
     val messagesArray = JSONArray()
@@ -482,7 +523,7 @@ private suspend fun streamLocalApi(userText: String, image: Bitmap?, port: Strin
         put("model", modelName)
         put("messages", messagesArray)
         put("stream", true)
-        if (image != null) put("has_image", true)
+        if (imageBytes != null) put("has_image", true)
     }
 
     val conn = (URL("http://127.0.0.1:$port/v1/chat/completions").openConnection() as HttpURLConnection).apply {
@@ -533,7 +574,7 @@ fun ChatBubble(message: ChatMessage) {
         Surface(color = bubbleColor, shape = shape, modifier = Modifier.widthIn(max = 300.dp)) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 if (message.imageBitmap != null) {
-                    Image(bitmap = message.imageBitmap.asImageBitmap(), contentDescription = "Sent image",
+                    Image(bitmap = message.imageBitmap, contentDescription = "Sent image",
                         modifier = Modifier.fillMaxWidth().heightIn(max = 180.dp).clip(RoundedCornerShape(8.dp)),
                         contentScale = ContentScale.Crop)
                     if (message.content.isNotBlank()) Spacer(Modifier.height(6.dp))

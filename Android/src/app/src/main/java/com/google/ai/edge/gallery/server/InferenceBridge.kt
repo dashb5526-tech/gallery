@@ -118,12 +118,10 @@ class InferenceBridge {
 
         // Check for in-memory image from PendingImageStore (set by test chat UI)
         if (request.hasImage == true) {
-            val bitmap = PendingImageStore.take()
-            if (bitmap != null) {
-                val stream = java.io.ByteArrayOutputStream()
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream)
-                contents.add(Content.ImageBytes(stream.toByteArray()))
-                Log.d(TAG, "Using in-memory image: ${stream.size()} bytes")
+            val imageBytes = PendingImageStore.take()
+            if (imageBytes != null) {
+                contents.add(Content.ImageBytes(imageBytes))
+                Log.d(TAG, "Using in-memory image: ${imageBytes.size} bytes")
             } else {
                 Log.w(TAG, "has_image=true but no image found in PendingImageStore")
             }
