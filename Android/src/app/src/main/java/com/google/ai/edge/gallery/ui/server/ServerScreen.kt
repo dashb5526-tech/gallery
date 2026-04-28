@@ -321,7 +321,7 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
         }
     }
 
-    Column(modifier = modifier) {
+    Column(modifier = modifier.imePadding()) {
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
             if (messages.isEmpty() && !isLoading) {
@@ -369,15 +369,8 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
                 }
                 OutlinedTextField(value = inputText, onValueChange = { inputText = it }, modifier = Modifier.weight(1f),
                     placeholder = { Text("Type a message…") }, shape = RoundedCornerShape(24.dp), maxLines = 4, enabled = !isLoading,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = {
-                        if ((inputText.isNotBlank() || attachedImage != null) && !isLoading) {
-                            val msg = inputText.trim(); val img = attachedImage; inputText = ""; attachedImage = null
-                            currentJob = scope.launch {
-                                sendTestMessage(msg, img, port, apiKey, modelName, messages, activeConnection, { isLoading = it }) { scope.launch { listState.animateScrollToItem(messages.size) } }
-                            }
-                        }
-                    }))
+                    singleLine = false,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default))
                 Spacer(Modifier.width(4.dp))
                 if (isLoading) {
                     // Stop button — disconnect the HTTP connection to break the stream
