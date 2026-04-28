@@ -93,6 +93,7 @@ fun SettingsDialog(
   curThemeOverride: Theme,
   modelManagerViewModel: ModelManagerViewModel,
   onDismissed: () -> Unit,
+  onServerClicked: () -> Unit,
 ) {
   var selectedTheme by remember { mutableStateOf(curThemeOverride) }
   var hfToken by remember { mutableStateOf(modelManagerViewModel.getTokenStatusAndData().data) }
@@ -306,6 +307,25 @@ fun SettingsDialog(
               }
             ) {
               Text("View licenses")
+            }
+          }
+
+          // Local API Server settings.
+          Column(modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
+            Text(
+              "Local API Server",
+              style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+            )
+            Text(
+              "Run an OpenAI-compatible API server on this device to use local models from other apps or devices.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(bottom = 8.dp)
+            )
+            OutlinedButton(
+              onClick = { onServerClicked() }
+            ) {
+              Text("Open Server Settings")
             }
           }
 

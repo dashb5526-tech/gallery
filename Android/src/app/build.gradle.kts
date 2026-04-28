@@ -68,6 +68,11 @@ android {
     compose = true
     buildConfig = true
   }
+
+  packagingOptions.pickFirsts.add("META-INF/INDEX.LIST")
+  packagingOptions.pickFirsts.add("META-INF/io.netty.versions.properties")
+  packagingOptions.pickFirsts.add("META-INF/AL2.0")
+  packagingOptions.pickFirsts.add("META-INF/LGPL2.1")
 }
 
 dependencies {
@@ -121,6 +126,14 @@ dependencies {
   debugImplementation(libs.androidx.ui.test.manifest)
   ksp(libs.moshi.kotlin.codegen)
   implementation(libs.mlkit.genai.prompt)
+
+  // Ktor Server Dependencies
+  implementation(libs.ktor.server.core)
+  implementation(libs.ktor.server.cio)
+  implementation(libs.ktor.server.cors)
+  implementation(libs.ktor.server.content.negotiation)
+  implementation(libs.ktor.server.auth)
+  implementation(libs.ktor.serialization.kotlinx.json)
 }
 
 protobuf {

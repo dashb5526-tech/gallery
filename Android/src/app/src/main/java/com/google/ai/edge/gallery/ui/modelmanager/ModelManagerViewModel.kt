@@ -55,6 +55,7 @@ import com.google.ai.edge.gallery.proto.AccessTokenData
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.runtime.aicore.AICoreModelHelper
+import com.google.ai.edge.gallery.server.ModelProvider
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -446,6 +447,9 @@ constructor(
             model = model,
             status = ModelInitializationStatusType.INITIALIZED,
           )
+          if (model.isLlm) {
+            ModelProvider.registerModel(model)
+          }
           if (model.cleanUpAfterInit) {
             Log.d(TAG, "Model '${model.name}' needs cleaning up after init.")
             cleanupModel(context = context, task = task, model = model)
@@ -479,6 +483,13 @@ constructor(
     instanceToCleanUp: Any? = model.instance,
     onDone: () -> Unit = {},
   ) {
+    // Don't clean up a model that is actively being used by the Local API Server.
+    if (ModelProvider.isModelUsedByServer(model.name)) {
+      Log.d(TAG, "Model '${model.name}' is being used by the server. Skipping cleanup.")
+      onDone()
+      return
+    }
+
     if (instanceToCleanUp != null && instanceToCleanUp !== model.instance) {
       Log.d(TAG, "Stale cleanup request for ${model.name}. Aborting.")
       onDone()
@@ -495,6 +506,7 @@ constructor(
           model = model,
           status = ModelInitializationStatusType.NOT_INITIALIZED,
         )
+        ModelProvider.unregisterModel(model.name)
         Log.d(TAG, "Clean up model '${model.name}' done")
         onDone()
       }

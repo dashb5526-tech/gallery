@@ -96,6 +96,7 @@ private const val ROUTE_MODEL_LIST = "model_list"
 private const val ROUTE_MODEL = "route_model"
 private const val ROUTE_BENCHMARK = "benchmark"
 private const val ROUTE_MODEL_MANAGER = "model_manager"
+private const val ROUTE_SERVER = "server"
 private const val ENTER_ANIMATION_DURATION_MS = 500
 private val ENTER_ANIMATION_EASING = EaseOutExpo
 private const val ENTER_ANIMATION_DELAY_MS = 100
@@ -208,6 +209,7 @@ fun GalleryNavHost(
               )
             },
             onModelsClicked = { navController.navigate(ROUTE_MODEL_MANAGER) },
+            onServerClicked = { navController.navigate(ROUTE_SERVER) },
             gm4 = true,
           )
         }
@@ -436,6 +438,21 @@ fun GalleryNavHost(
           },
         )
       }
+    }
+
+    // Local API Server page.
+    composable(
+      route = ROUTE_SERVER,
+      enterTransition = { slideEnter() },
+      exitTransition = { slideExit() },
+    ) {
+      com.google.ai.edge.gallery.ui.server.ServerScreen(
+        navigateUp = {
+          enableHomeScreenAnimation = false
+          navController.navigateUp()
+        },
+        modelManagerViewModel = modelManagerViewModel
+      )
     }
   }
 
