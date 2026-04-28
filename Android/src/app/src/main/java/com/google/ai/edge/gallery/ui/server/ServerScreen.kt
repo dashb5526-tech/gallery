@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -46,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -138,21 +140,35 @@ fun ServerScreen(
 
                 // Model Selection
                 SettingsItem(Icons.Rounded.CloudQueue, "Model", "Select model for inference") {
-                    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { if (status == LocalApiService.ServerStatus.STOPPED) expanded = !expanded }) {
-                        OutlinedTextField(
-                            value = llmModels.find { it.name == selectedModelName }?.name ?: "Select a model",
-                            onValueChange = {}, readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-                            modifier = Modifier.menuAnchor().fillMaxWidth(),
-                            enabled = status == LocalApiService.ServerStatus.STOPPED
-                        )
-                        ExposedDropdownMenu(expanded, onDismissRequest = { expanded = false }) {
-                            if (llmModels.isEmpty()) {
-                                DropdownMenuItem(text = { Text("No models downloaded") }, onClick = { expanded = false })
-                            } else {
-                                llmModels.forEach { model ->
-                                    DropdownMenuItem(text = { Text(model.name) }, onClick = { viewModel.selectModel(model.name); expanded = false })
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ExposedDropdownMenuBox(
+                            expanded = expanded,
+                            onExpandedChange = { if (status == LocalApiService.ServerStatus.STOPPED) expanded = !expanded },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            OutlinedTextField(
+                                value = llmModels.find { it.name == selectedModelName }?.name ?: "Select a model",
+                                onValueChange = {}, readOnly = true,
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                enabled = status == LocalApiService.ServerStatus.STOPPED
+                            )
+                            ExposedDropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+                                if (llmModels.isEmpty()) {
+                                    DropdownMenuItem(text = { Text("No models downloaded") }, onClick = { expanded = false })
+                                } else {
+                                    llmModels.forEach { model ->
+                                        DropdownMenuItem(text = { Text(model.name) }, onClick = { viewModel.selectModel(model.name); expanded = false })
+                                    }
                                 }
+                            }
+                        }
+                        if (selectedModelName.isNotEmpty()) {
+                            IconButton(
+                                onClick = { clipboardManager.setText(AnnotatedString(selectedModelName)) },
+                                modifier = Modifier.padding(top = 8.dp)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, "Copy Model ID")
                             }
                         }
                     }
@@ -221,20 +237,50 @@ fun ServerScreen(
                     OutlinedTextField(value = port, onValueChange = { if (it.all { c -> c.isDigit() }) viewModel.savePort(it) },
                         modifier = Modifier.fillMaxWidth(), label = { Text("Port") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 }
+
+                if (status == LocalApiService.ServerStatus.RUNNING && ip != null) {
+                    HorizontalDivider(Modifier.padding(vertical = 16.dp))
+                    Text("Connection Details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    
+                    val baseUrl = "http://$ip:$port/v1"
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            DetailItem("Base URL", baseUrl, clipboardManager)
+                            DetailItem("Model ID", selectedModelName, clipboardManager)
+                        }
+                    }
+                }
             }
         }
-    }
 
-    // Config Dialog
-    if (showConfig) {
-        ConfigDialog(
-            currentAccelerator = accelerator, currentTopK = topK, currentTopP = topP, currentTemperature = temperature,
-            onDismiss = { showConfig = false },
-            onSave = { acc, tk, tp, temp ->
-                viewModel.saveAccelerator(acc); viewModel.saveTopK(tk); viewModel.saveTopP(tp); viewModel.saveTemperature(temp)
-                showConfig = false
+        // Config Dialog
+        if (showConfig) {
+            ConfigDialog(
+                currentAccelerator = accelerator, currentTopK = topK, currentTopP = topP, currentTemperature = temperature,
+                onDismiss = { showConfig = false },
+                onSave = { acc, tk, tp, temp ->
+                    viewModel.saveAccelerator(acc); viewModel.saveTopK(tk); viewModel.saveTopP(tp); viewModel.saveTemperature(temp)
+                    showConfig = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun DetailItem(label: String, value: String, clipboard: androidx.compose.ui.platform.ClipboardManager) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(value, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            IconButton(onClick = { clipboard.setText(AnnotatedString(value)) }) {
+                Icon(Icons.Default.ContentCopy, "Copy", modifier = Modifier.size(20.dp))
             }
-        )
+        }
     }
 }
 
@@ -602,6 +648,8 @@ fun StatusCard(status: LocalApiService.ServerStatus, ip: String?, port: String, 
         LocalApiService.ServerStatus.RUNNING -> Color(0xFF4CAF50); LocalApiService.ServerStatus.STARTING -> Color(0xFFFFC107)
         LocalApiService.ServerStatus.ERROR -> MaterialTheme.colorScheme.error; LocalApiService.ServerStatus.STOPPED -> MaterialTheme.colorScheme.outline
     }
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))) {
         Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(80.dp).clip(CircleShape).background(statusColor.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
@@ -610,7 +658,23 @@ fun StatusCard(status: LocalApiService.ServerStatus, ip: String?, port: String, 
             }
             Spacer(Modifier.height(16.dp))
             Text(status.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = statusColor)
-            if (status == LocalApiService.ServerStatus.RUNNING && ip != null) Text("http://$ip:$port", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+            
+            if (status == LocalApiService.ServerStatus.RUNNING && ip != null) {
+                val fullUrl = "http://$ip:$port/v1"
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .clickable { clipboardManager.setText(AnnotatedString(fullUrl)) }
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text(fullUrl, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+            }
             if (status == LocalApiService.ServerStatus.ERROR && !errorMessage.isNullOrBlank()) Text(errorMessage, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }
     }
