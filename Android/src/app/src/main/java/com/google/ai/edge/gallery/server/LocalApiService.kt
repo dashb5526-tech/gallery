@@ -35,6 +35,7 @@ import com.google.ai.edge.gallery.data.Accelerator
 import com.google.ai.edge.gallery.data.ConfigKeys
 import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.runtime.runtimeHelper
+import com.google.ai.edge.gallery.ui.llmchat.LlmChatModelHelper
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import java.net.Inet4Address
@@ -286,15 +287,37 @@ class LocalApiService : Service() {
     }
 
     private fun stopServer() {
+        // Update status immediately for fast UI feedback
+        _serverStatus.value = ServerStatus.STOPPED
+        _serverIp.value = null
+        _errorMessage.value = null
+
         serviceScope.launch(Dispatchers.IO) {
-            server?.stop()
-            server = null
-            ModelProvider.setServerActiveModel(null)
-            _serverStatus.value = ServerStatus.STOPPED
-            _serverIp.value = null
-            _errorMessage.value = null
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            try {
+                // 1. Release the model engine if one is active
+                ModelProvider.serverActiveModelName?.let { modelName ->
+                    ModelProvider.getRegisteredModel(modelName)?.let { model ->
+                        if (model.isLlm) {
+                            Log.d(TAG, "Releasing model engine for '$modelName'...")
+                            LlmChatModelHelper.cleanUp(model) {
+                                Log.d(TAG, "Model '$modelName' released successfully.")
+                            }
+                        }
+                    }
+                }
+                
+                // 2. Clear the server active flag
+                ModelProvider.setServerActiveModel(null)
+
+                // 3. Stop the Ktor server with a short grace period
+                server?.stop(500, 1000)
+                server = null
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during server shutdown", e)
+            } finally {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
         }
     }
 

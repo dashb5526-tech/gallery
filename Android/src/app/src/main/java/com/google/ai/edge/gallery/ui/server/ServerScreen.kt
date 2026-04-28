@@ -101,6 +101,13 @@ fun ServerScreen(
     var showChat by remember { mutableStateOf(false) }
     var showConfig by remember { mutableStateOf(false) }
 
+    // Automatically close chat if server stops
+    LaunchedEffect(status) {
+        if (showChat && status != LocalApiService.ServerStatus.RUNNING && status != LocalApiService.ServerStatus.STARTING) {
+            showChat = false
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
