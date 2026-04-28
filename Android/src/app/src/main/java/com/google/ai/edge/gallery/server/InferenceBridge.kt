@@ -121,7 +121,7 @@ class InferenceBridge {
             val bitmap = PendingImageStore.take()
             if (bitmap != null) {
                 val stream = java.io.ByteArrayOutputStream()
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream)
                 contents.add(Content.ImageBytes(stream.toByteArray()))
                 Log.d(TAG, "Using in-memory image: ${stream.size()} bytes")
             } else {

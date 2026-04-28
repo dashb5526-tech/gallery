@@ -281,15 +281,41 @@ fun TestChatPanel(port: String, apiKey: String, modelName: String, modifier: Mod
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { u ->
-            // Decode on background thread to avoid blocking the main thread / keyboard
             scope.launch(Dispatchers.IO) {
                 try {
-                    val inputStream = context.contentResolver.openInputStream(u)
-                    // Subsample large images during decode to save memory
-                    val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
-                    val bmp = BitmapFactory.decodeStream(inputStream, null, opts)
-                    inputStream?.close()
-                    withContext(Dispatchers.Main) { attachedImage = bmp }
+                    // First pass: decode only dimensions (no pixels loaded into memory)
+                    val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, boundsOpts) }
+
+                    // Calculate inSampleSize to get close to 512px (power of 2 downscale)
+                    val maxPx = 512
+                    var sampleSize = 1
+                    val w = boundsOpts.outWidth; val h = boundsOpts.outHeight
+                    if (w > maxPx || h > maxPx) {
+                        val halfW = w / 2; val halfH = h / 2
+                        while (halfW / sampleSize >= maxPx && halfH / sampleSize >= maxPx) {
+                            sampleSize *= 2
+                        }
+                    }
+
+                    // Second pass: decode with subsampling + RGB_565 (half the memory of ARGB_8888)
+                    val decodeOpts = BitmapFactory.Options().apply {
+                        inSampleSize = sampleSize
+                        inPreferredConfig = Bitmap.Config.RGB_565
+                    }
+                    val bmp = context.contentResolver.openInputStream(u)?.use {
+                        BitmapFactory.decodeStream(it, null, decodeOpts)
+                    }
+
+                    // Final scale to exactly 512px max if still larger
+                    val finalBmp = if (bmp != null && (bmp.width > maxPx || bmp.height > maxPx)) {
+                        val s = maxPx.toFloat() / maxOf(bmp.width, bmp.height)
+                        val scaled = Bitmap.createScaledBitmap(bmp, (bmp.width * s).toInt(), (bmp.height * s).toInt(), true)
+                        if (scaled !== bmp) bmp.recycle()
+                        scaled
+                    } else bmp
+
+                    withContext(Dispatchers.Main) { attachedImage = finalBmp }
                 } catch (_: Exception) {}
             }
         }
@@ -439,16 +465,9 @@ private suspend fun sendTestMessage(userText: String, image: Bitmap?, port: Stri
 private suspend fun streamLocalApi(userText: String, image: Bitmap?, port: String, apiKey: String, modelName: String,
     activeConnection: MutableState<HttpURLConnection?>, chatHistory: List<ChatMessage>, onChunk: suspend (String) -> Unit) {
 
-    // If there's an image, store it in-memory for InferenceBridge to pick up directly
-    // This avoids serializing huge base64 strings through HTTP JSON
+    // Image already scaled to 512px at pick time — just store directly
     if (image != null) {
-        val maxPx = 512
-        val w = image.width; val h = image.height
-        val scaled = if (w > maxPx || h > maxPx) {
-            val s = maxPx.toFloat() / maxOf(w, h)
-            Bitmap.createScaledBitmap(image, (w * s).toInt(), (h * s).toInt(), true)
-        } else image
-        PendingImageStore.set(scaled)
+        PendingImageStore.set(image)
     }
 
     val messagesArray = JSONArray()
