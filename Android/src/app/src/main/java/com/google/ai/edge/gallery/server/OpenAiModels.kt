@@ -2,25 +2,38 @@ package com.google.ai.edge.gallery.server
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+
+const val MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024 // 3MB limit
 
 // --- Requests ---
 
 @Serializable
 data class ChatCompletionRequest(
-    val model: String,
-    val messages: List<Message>,
-    val temperature: Float? = null,
-    @SerialName("top_p") val topP: Float? = null,
-    @SerialName("max_tokens") val maxTokens: Int? = null,
+    val model: String? = "default",
+    val messages: List<Message> = emptyList(),
+    val temperature: Float? = 1.0f,
+    @SerialName("top_p") val topP: Float? = 1.0f,
+    val n: Int? = 1,
     val stream: Boolean? = false,
     val stop: List<String>? = null,
-    @SerialName("has_image") val hasImage: Boolean? = false
+    @SerialName("max_tokens") val maxTokens: Int? = 10000,
+    @SerialName("has_image") val hasImage: Boolean? = false,
+    val attachments: List<Attachment>? = null
+)
+
+@Serializable
+data class Attachment(
+    val name: String,
+    val type: String, // "pdf", "text", "image"
+    val data: String // base64
 )
 
 @Serializable
 data class Message(
-    val role: String, // system, user, assistant
-    val content: String
+    val role: String = "user", // system, user, assistant
+    val content: JsonElement, // Can be String or List of Content objects
+    val name: String? = null
 )
 
 // --- Responses ---
@@ -86,19 +99,18 @@ data class OpenAiModel(
     val id: String,
     val `object`: String = "model",
     val created: Long,
-    @SerialName("owned_by") val ownedBy: String
-)
-
-// --- Error Responses ---
-
-@Serializable
-data class OpenAiErrorResponse(
-    val error: OpenAiError
+    @SerialName("owned_by") val ownedBy: String = "local"
 )
 
 @Serializable
 data class OpenAiError(
     val message: String,
-    val type: String,
+    val type: String? = "invalid_request_error",
+    val param: String? = null,
     val code: String? = null
+)
+
+@Serializable
+data class ErrorResponse(
+    val error: OpenAiError
 )

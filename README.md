@@ -48,6 +48,8 @@ For users without Google Play access, install the apk from the [**latest release
 
 * **Model Management & Benchmark**: Gallery is a flexible sandbox for a wide variety of open-source models. Easily download models from the list or load your own custom models. Manage your model library effortlessly and run benchmark tests to understand exactly how each model performs on your specific hardware.
 
+* **Local AI API Server**: Turn your device into a local AI powerhouse. The built-in OpenAI-compatible server allows you to connect external tools (like IDE extensions or custom scripts) to your on-device models securely. Features include universal model fallback and direct PDF document analysis. [Learn more](LOCAL_SERVER_API.md).
+
 * **100% On-Device Privacy**: All model inferences happen directly on your device hardware. No internet is required, ensuring total privacy for your prompts, images, and sensitive data.
 
 ## 🏁 Get Started in Minutes!
@@ -82,6 +84,7 @@ Licensed under the Apache License, Version 2.0. See the [LICENSE](LICENSE) file 
 ## 🔗 Useful Links
 
 *   [**Project Wiki (Detailed Guides)**](https://github.com/google-ai-edge/gallery/wiki)
+*   [**Local AI API Server Guide**](LOCAL_SERVER_API.md)
 *   [Hugging Face LiteRT Community](https://huggingface.co/litert-community)
 *   [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM)
 *   [Google AI Edge Documentation](https://ai.google.dev/edge)

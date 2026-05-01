@@ -529,7 +529,6 @@ constructor(
       }
     }
   }
-
   fun setDownloadStatus(curModel: Model, status: ModelDownloadStatus) {
     // Update model download progress.
     val curModelDownloadStatus = uiState.value.modelDownloadStatus.toMutableMap()
@@ -542,6 +541,11 @@ constructor(
         status.status == ModelDownloadStatusType.NOT_DOWNLOADED
     ) {
       deleteFileFromExternalFilesDir(curModel.downloadFileName)
+    }
+
+    // Add to ModelProvider if it's a downloaded LLM so the server can find it
+    if (status.status == ModelDownloadStatusType.SUCCEEDED && curModel.isLlm) {
+      ModelProvider.registerModel(curModel)
     }
 
     _uiState.update { newUiState }
@@ -674,6 +678,11 @@ constructor(
         }
       }
       task.updateTrigger.value = System.currentTimeMillis()
+    }
+
+    // Add to ModelProvider so the server can find it
+    if (model.isLlm) {
+      ModelProvider.registerModel(model)
     }
 
     // Add initial status and states.
@@ -991,6 +1000,7 @@ constructor(
 
           val model = allowedModel.toModel()
           _allowlistModels.add(model)
+          if (model.isLlm) ModelProvider.registerModel(model)
           nameToModel.put(model.name, model)
           for (taskType in allowedModel.taskTypes) {
             val task = curTasks.find { it.id == taskType }
@@ -1126,7 +1136,14 @@ constructor(
         if (checkedModelNames.contains(model.name)) {
           continue
         }
-        modelDownloadStatus[model.name] = getModelDownloadStatus(model = model)
+        val status = getModelDownloadStatus(model = model)
+        modelDownloadStatus[model.name] = status
+        
+        // Register with ModelProvider if already downloaded so server can find it
+        if (status.status == ModelDownloadStatusType.SUCCEEDED && model.isLlm) {
+            ModelProvider.registerModel(model)
+        }
+        
         modelInstances[model.name] =
           ModelInitializationStatus(status = ModelInitializationStatusType.NOT_INITIALIZED)
         checkedModelNames.add(model.name)

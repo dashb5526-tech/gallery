@@ -1,102 +1,133 @@
 package com.google.ai.edge.gallery.server
 
+import android.content.Context
+import android.util.Base64
 import android.util.Log
-import com.google.ai.edge.gallery.data.Accelerator
-import com.google.ai.edge.gallery.data.ConfigKeys
-import com.google.ai.edge.gallery.data.DEFAULT_TOPK
-import com.google.ai.edge.gallery.data.DEFAULT_TOPP
-import com.google.ai.edge.gallery.data.DEFAULT_TEMPERATURE
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.ui.llmchat.LlmModelInstance
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.MessageCallback
-import io.ktor.http.ContentType
-import io.ktor.http.HttpStatusCode
-import io.ktor.server.application.ApplicationCall
-import io.ktor.server.response.respond
-import io.ktor.server.response.respondTextWriter
-import kotlinx.coroutines.CancellationException
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import java.util.UUID
+import kotlinx.serialization.json.*
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
 
-private const val TAG = "InferenceBridge"
+class InferenceBridge(private val context: Context) {
 
-class InferenceBridge {
-    private val json = Json { encodeDefaults = true }
-    private val inferenceMutex = Mutex()
+    companion object {
+        private const val TAG = "InferenceBridge"
+    }
 
-    fun getAvailableModels(): List<OpenAiModel> {
-        return ModelProvider.getActiveModels().map {
-            OpenAiModel(
-                id = it.name,
-                created = System.currentTimeMillis() / 1000,
-                ownedBy = "google-ai-edge"
-            )
+    init {
+        try {
+            com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(context)
+            Log.d(TAG, "PDFBox initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize PDFBox", e)
         }
     }
 
-    suspend fun handleChatCompletion(call: ApplicationCall, request: ChatCompletionRequest) {
-        val modelName = request.model
-        val localModel = ModelProvider.getActiveModels().find { it.name == modelName }
+    private var currentModelInstance: LlmModelInstance? = null
 
-        if (localModel == null) {
-            call.respond(
-                HttpStatusCode.NotFound,
-                OpenAiErrorResponse(
-                    OpenAiError(message = "Model '$modelName' not found or not initialized.", type = "invalid_request_error")
-                )
-            )
-            return
+    suspend fun handleChatCompletion(
+        request: ChatCompletionRequest,
+        onChunk: suspend (ChatCompletionChunk) -> Unit
+    ) {
+        val requestedModel = request.model
+        var model = ModelProvider.getModel(requestedModel ?: "")
+        if (model == null) {
+            val activeModelName = ModelProvider.serverActiveModelName
+            if (!activeModelName.isNullOrBlank()) {
+                model = ModelProvider.getModel(activeModelName)
+            }
+        }
+        if (model == null) {
+            model = ModelProvider.getActiveModels().firstOrNull()
         }
 
-        if (localModel.instance == null) {
-            call.respond(
-                HttpStatusCode.BadRequest,
-                OpenAiErrorResponse(
-                    OpenAiError(message = "Model '$modelName' is not currently loaded in memory. Please select it in the app first.", type = "invalid_request_error")
-                )
-            )
-            return
+        if (model == null) {
+            Log.e(TAG, "No active models found for request: $requestedModel")
+            throw IllegalArgumentException("No initialized models available. Please load a model in the app first.")
         }
 
-        if (!inferenceMutex.tryLock()) {
-            call.respond(
-                HttpStatusCode.ServiceUnavailable,
-                OpenAiErrorResponse(
-                    OpenAiError(message = "The inference engine is currently busy.", type = "server_error")
-                )
-            )
-            return
-        }
+        val modelName = model.name
+        val id = "chatcmpl-${System.currentTimeMillis()}"
+        
+        currentModelInstance = model.instance as? LlmModelInstance
 
         try {
-            val isStreaming = request.stream ?: false
-
-            if (isStreaming) {
-                handleStreamingInference(call, request, localModel)
-            } else {
-                handleBlockingInference(call, request, localModel)
+            createConversationFlow(model, request).collect { chunkText ->
+                val chunk = ChatCompletionChunk(
+                    id = id,
+                    created = System.currentTimeMillis() / 1000,
+                    model = modelName,
+                    choices = listOf(
+                        ChunkChoice(
+                            index = 0,
+                            delta = Delta(content = chunkText)
+                        )
+                    )
+                )
+                onChunk(chunk)
             }
         } finally {
-            inferenceMutex.unlock()
+            stopCurrentSession()
         }
     }
 
-    /**
-     * Simple inference flow: send ONLY the last user message to the model's existing conversation.
-     *
-     * The LiteRT Conversation object maintains its own internal history — exactly like the
-     * default AI Chat screen. We do NOT need to replay prior messages; the engine remembers
-     * the conversation context between calls.
-     *
-     * This matches how the chat UI works (see LlmChatModelHelper.runInference):
-     *   conversation.sendMessageAsync(contents, callback, emptyMap())
-     */
+    suspend fun getAvailableModels(): List<OpenAiModel> {
+        return ModelProvider.getActiveModels().map { model ->
+            OpenAiModel(
+                id = model.name,
+                created = System.currentTimeMillis() / 1000
+            )
+        }
+    }
+
+    private suspend fun processDocumentAttachments(attachments: List<Attachment>?): String {
+        if (attachments == null) return ""
+        val sb = StringBuilder()
+        for (attachment in attachments) {
+            try {
+                if (attachment.type == "pdf") {
+                    val data = Base64.decode(attachment.data, Base64.DEFAULT)
+                    if (data.size > MAX_FILE_SIZE_BYTES) {
+                        sb.append("\n[Error: Attachment '${attachment.name}' exceeds 3MB limit]\n")
+                        continue
+                    }
+                    val text = extractTextFromPdf(data)
+                    sb.append("\n[Document Content: ${attachment.name}]\n$text\n[End Document]\n")
+                } else if (attachment.type == "text") {
+                    val data = Base64.decode(attachment.data, Base64.DEFAULT)
+                    val text = String(data)
+                    sb.append("\n[File Content: ${attachment.name}]\n$text\n[End File]\n")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error processing attachment '${attachment.name}'", e)
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun extractTextFromPdf(data: ByteArray): String {
+        return try {
+            ByteArrayInputStream(data).use { inputStream ->
+                PDDocument.load(inputStream).use { document ->
+                    PDFTextStripper().getText(document)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "PDF extraction failed", e)
+            ""
+        }
+    }
+
     private fun createConversationFlow(model: Model, request: ChatCompletionRequest) = callbackFlow<String> {
         val instance = model.instance as? LlmModelInstance
         if (instance == null) {
@@ -105,32 +136,71 @@ class InferenceBridge {
         }
 
         val conversation = instance.conversation
+        
+        val contents = mutableListOf<Content>()
+        val textBuilder = StringBuilder()
 
-        // Extract only the LAST user message — the conversation already has prior context
-        val lastUserMessage = request.messages.lastOrNull { it.role == "user" }
-        if (lastUserMessage == null) {
-            close(Exception("No user message provided"))
-            return@callbackFlow
+        PendingImageStore.take()?.let { data ->
+            Log.i(TAG, "Found image in PendingImageStore (${data.size} bytes)")
+            contents.add(Content.ImageBytes(data))
         }
 
-        // Build content list: image first (if any), then text — same as LlmChatModelHelper
-        val contents = mutableListOf<Content>()
-
-        // Check for in-memory image from PendingImageStore (set by test chat UI)
-        if (request.hasImage == true) {
-            val imageBytes = PendingImageStore.take()
-            if (imageBytes != null) {
-                contents.add(Content.ImageBytes(imageBytes))
-                Log.d(TAG, "Using in-memory image: ${imageBytes.size} bytes")
-            } else {
-                Log.w(TAG, "has_image=true but no image found in PendingImageStore")
+        request.messages.forEach { msg ->
+            val role = msg.role
+            val contentJson = msg.content
+            
+            if (contentJson is JsonPrimitive && contentJson.isString) {
+                val text = contentJson.content
+                when (role) {
+                    "system" -> textBuilder.insert(0, "System Instruction: $text\n\n")
+                    "user" -> textBuilder.append("User: $text\n")
+                    "assistant" -> textBuilder.append("Assistant: $text\n")
+                }
+            } else if (contentJson is JsonArray) {
+                contentJson.forEach { element ->
+                    val obj = element.jsonObject
+                    val type = obj["type"]?.jsonPrimitive?.content
+                    if (type == "text") {
+                        val text = obj["text"]?.jsonPrimitive?.content ?: ""
+                        textBuilder.append("${role.replaceFirstChar { it.uppercase() }}: $text\n")
+                    } else if (type == "image_url") {
+                        val url = obj["image_url"]?.jsonObject?.get("url")?.jsonPrimitive?.content ?: ""
+                        if (url.startsWith("data:image")) {
+                            try {
+                                val base64Data = url.substringAfter("base64,")
+                                val data = Base64.decode(base64Data, Base64.DEFAULT)
+                                if (data.size <= MAX_FILE_SIZE_BYTES) {
+                                    contents.add(Content.ImageBytes(ensurePng(data)))
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to decode image_url base64", e)
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // Add text content after image (same order as Ask Image feature)
-        val textContent = lastUserMessage.content.trim()
-        if (textContent.isNotEmpty()) {
-            contents.add(Content.Text(textContent))
+        request.attachments?.filter { it.type == "image" }?.forEach { attachment ->
+            try {
+                val data = Base64.decode(attachment.data, Base64.DEFAULT)
+                if (data.size <= MAX_FILE_SIZE_BYTES) {
+                    contents.add(Content.ImageBytes(ensurePng(data)))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to decode image attachment", e)
+            }
+        }
+
+        val docContext = processDocumentAttachments(request.attachments)
+        val finalPrompt = if (docContext.isNotEmpty()) {
+            "$docContext\n\nFull Conversation History:\n${textBuilder}\nContinue the conversation based on the history above."
+        } else {
+            textBuilder.toString()
+        }
+
+        if (finalPrompt.trim().isNotEmpty()) {
+            contents.add(Content.Text(finalPrompt))
         }
 
         if (contents.isEmpty()) {
@@ -138,101 +208,58 @@ class InferenceBridge {
             return@callbackFlow
         }
 
-        val contentsObj = Contents.of(contents)
-
-        Log.d(TAG, "Sending message to conversation: '${textContent.take(50)}...' (hasImage=${request.hasImage})")
-
-        conversation.sendMessageAsync(
-            contentsObj,
-            object : MessageCallback {
-                override fun onMessage(message: com.google.ai.edge.litertlm.Message) {
-                    val text = message.toString()
-                    if (text.isNotEmpty()) {
-                        trySend(text)
+        try {
+            conversation.sendMessageAsync(
+                Contents.of(contents),
+                object : MessageCallback {
+                    override fun onMessage(message: com.google.ai.edge.litertlm.Message) {
+                        val text = message.toString()
+                        if (text.isNotEmpty()) {
+                            trySend(text)
+                        }
                     }
-                }
-                override fun onDone() {
-                    close()
-                }
-                override fun onError(throwable: Throwable) {
-                    if (throwable is CancellationException) {
+
+                    override fun onDone() {
                         close()
-                    } else {
-                        Log.e(TAG, "Inference error", throwable)
-                        close(Exception(throwable.message))
+                    }
+
+                    override fun onError(throwable: Throwable) {
+                        if (throwable is java.util.concurrent.CancellationException) {
+                            Log.i(TAG, "Native inference cancelled")
+                        } else {
+                            Log.e(TAG, "Inference error", throwable)
+                            trySend("Error: ${throwable.message}")
+                        }
+                        close()
                     }
                 }
-            },
-            emptyMap()
-        )
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start inference", e)
+            close(e)
+        }
 
         awaitClose {
-            // Don't close or cancel the conversation — it's the model's persistent conversation.
-            // Just let the flow complete naturally.
-            Log.d(TAG, "Flow closed")
+            Log.d(TAG, "Closing conversation flow, cancelling native process if running")
+            conversation.cancelProcess()
         }
     }
 
-    private suspend fun handleBlockingInference(call: ApplicationCall, request: ChatCompletionRequest, model: Model) {
-        val responseBuilder = StringBuilder()
-        try {
-            val flow = createConversationFlow(model, request)
-            flow.collect { chunk ->
-                responseBuilder.append(chunk)
-            }
+    fun stopCurrentSession() {
+        Log.i(TAG, "Stopping current inference session")
+        currentModelInstance?.conversation?.cancelProcess()
+        currentModelInstance = null
+    }
 
-            val response = ChatCompletionResponse(
-                id = "chatcmpl-${UUID.randomUUID()}",
-                created = System.currentTimeMillis() / 1000,
-                model = request.model,
-                choices = listOf(
-                    Choice(
-                        index = 0,
-                        message = Message(role = "assistant", content = responseBuilder.toString()),
-                        finishReason = "stop"
-                    )
-                )
-            )
-            call.respond(response)
-        } catch (e: CancellationException) {
-            throw e
+    private fun ensurePng(data: ByteArray): ByteArray {
+        return try {
+            val bitmap = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size)
+            val stream = ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
+            stream.toByteArray()
         } catch (e: Exception) {
-            Log.e(TAG, "Blocking inference error", e)
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                OpenAiErrorResponse(
-                    OpenAiError(message = "Inference error: ${e.message}", type = "server_error")
-                )
-            )
-        }
-    }
-
-    private suspend fun handleStreamingInference(call: ApplicationCall, request: ChatCompletionRequest, model: Model) {
-        call.respondTextWriter(contentType = ContentType.Text.EventStream) {
-            try {
-                val flow = createConversationFlow(model, request)
-                flow.collect { chunk ->
-                    val sseChunk = ChatCompletionChunk(
-                        id = "chatcmpl-${UUID.randomUUID()}",
-                        created = System.currentTimeMillis() / 1000,
-                        model = request.model,
-                        choices = listOf(
-                            ChunkChoice(
-                                index = 0,
-                                delta = Delta(content = chunk)
-                            )
-                        )
-                    )
-                    write("data: ${json.encodeToString(sseChunk)}\n\n")
-                    flush()
-                }
-                write("data: [DONE]\n\n")
-                flush()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Streaming inference error", e)
-            }
+            Log.e("InferenceBridge", "Failed to ensure PNG format", e)
+            data
         }
     }
 }

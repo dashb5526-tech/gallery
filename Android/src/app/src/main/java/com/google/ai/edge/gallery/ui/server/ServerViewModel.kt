@@ -70,6 +70,9 @@ class ServerViewModel @Inject constructor(
     private val _temperature = MutableStateFlow((dataStoreRepository.readSecret("api_temperature") ?: "1.0").toFloatOrNull() ?: 1.0f)
     val temperature = _temperature.asStateFlow()
 
+    private val _maxTokens = MutableStateFlow((dataStoreRepository.readSecret("api_max_tokens") ?: "512").toIntOrNull() ?: 512)
+    val maxTokens = _maxTokens.asStateFlow()
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as LocalApiService.LocalApiBinder
@@ -115,6 +118,10 @@ class ServerViewModel @Inject constructor(
             action = "START"
             putExtra(LocalApiService.EXTRA_MODEL_NAME, _selectedModelName.value)
             putExtra(LocalApiService.EXTRA_ACCELERATOR, _accelerator.value)
+            putExtra("TEMPERATURE", _temperature.value)
+            putExtra("TOPP", _topP.value)
+            putExtra("TOPK", _topK.value)
+            putExtra("MAX_TOKENS", _maxTokens.value)
         }
         context.startForegroundService(intent)
         // After explicitly starting, bind with BIND_AUTO_CREATE to ensure connection
@@ -142,7 +149,12 @@ class ServerViewModel @Inject constructor(
     }
 
     fun generateApiKey() {
-        val newKey = "sk-" + UUID.randomUUID().toString().replace("-", "").take(32)
+        val charPool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#\$%&*"
+        val secureRandom = java.security.SecureRandom()
+        val secureKey = (1..48)
+            .map { charPool[secureRandom.nextInt(charPool.length)] }
+            .joinToString("")
+        val newKey = "sk-$secureKey"
         saveApiKey(newKey)
     }
 
@@ -152,6 +164,14 @@ class ServerViewModel @Inject constructor(
     }
 
     // Config setters
+    fun resetToDefaults() {
+        saveTemperature(1.0f)
+        saveTopP(0.95f)
+        saveTopK(64)
+        saveMaxTokens(512)
+        saveAccelerator(com.google.ai.edge.gallery.data.Accelerator.CPU.label)
+    }
+
     fun saveAccelerator(value: String) {
         _accelerator.value = value
         dataStoreRepository.saveSecret("api_accelerator", value)
@@ -170,6 +190,11 @@ class ServerViewModel @Inject constructor(
     fun saveTemperature(value: Float) {
         _temperature.value = value
         dataStoreRepository.saveSecret("api_temperature", value.toString())
+    }
+
+    fun saveMaxTokens(value: Int) {
+        _maxTokens.value = value
+        dataStoreRepository.saveSecret("api_max_tokens", value.toString())
     }
 
     override fun onCleared() {

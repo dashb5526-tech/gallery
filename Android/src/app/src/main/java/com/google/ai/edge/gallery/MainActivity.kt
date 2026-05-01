@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
   private var contentSet: Boolean = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    instance = this
     // We intentionally pass null to discard the saved instance state bundle.
     // This prevents Jetpack Compose from automatically restoring the previous screen
     // and forces the app to start cleanly on the Home Screen after an OS kill.
@@ -219,5 +220,7 @@ class MainActivity : ComponentActivity() {
 
   companion object {
     private const val TAG = "AGMainActivity"
+    lateinit var instance: MainActivity
+      private set
   }
 }

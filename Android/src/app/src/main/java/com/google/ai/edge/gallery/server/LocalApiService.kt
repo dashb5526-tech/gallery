@@ -36,6 +36,7 @@ import com.google.ai.edge.gallery.data.ConfigKeys
 import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.runtime.runtimeHelper
 import com.google.ai.edge.gallery.ui.llmchat.LlmChatModelHelper
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import java.net.Inet4Address
@@ -64,6 +65,7 @@ class LocalApiService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
 
     private var server: LocalApiServer? = null
+    private var inferenceBridge: InferenceBridge? = null
 
     private val _serverStatus = MutableStateFlow(ServerStatus.STOPPED)
     val serverStatus: StateFlow<ServerStatus> = _serverStatus
@@ -89,6 +91,15 @@ class LocalApiService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service onCreate")
+        
+        // Initialize PDFBox for document processing
+        try {
+            PDFBoxResourceLoader.init(this)
+            Log.d(TAG, "PDFBox initialized")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize PDFBox", e)
+        }
+
         createNotificationChannel()
 
         // Install a safety net to prevent native crashes from killing the app.
@@ -109,14 +120,26 @@ class LocalApiService : Service() {
             "START" -> {
                 val modelName = intent.getStringExtra("MODEL_NAME")
                 val accelerator = intent.getStringExtra("ACCELERATOR") ?: Accelerator.CPU.label
-                startServer(modelName, accelerator)
+                val temperature = intent.getFloatExtra("TEMPERATURE", 1.0f)
+                val topP = intent.getFloatExtra("TOPP", 0.95f)
+                val topK = intent.getIntExtra("TOPK", 64)
+                val maxTokens = intent.getIntExtra("MAX_TOKENS", 2048)
+                
+                startServer(modelName, accelerator, temperature, topP, topK, maxTokens)
             }
             "STOP" -> stopServer()
         }
         return START_STICKY
     }
 
-    private fun startServer(modelName: String? = null, accelerator: String = Accelerator.CPU.label) {
+    private fun startServer(
+        modelName: String? = null,
+        accelerator: String = Accelerator.CPU.label,
+        temperature: Float = 1.0f,
+        topP: Float = 0.95f,
+        topK: Int = 64,
+        maxTokens: Int = 2048
+    ) {
         Log.d(TAG, "=== startServer BEGIN === modelName=$modelName")
         if (_serverStatus.value == ServerStatus.RUNNING || _serverStatus.value == ServerStatus.STARTING) {
             Log.d(TAG, "Server already starting or running")
@@ -160,7 +183,8 @@ class LocalApiService : Service() {
                 }
                 Log.d(TAG, "Step 1: port=$port, apiKey=${if (apiKey.isNullOrBlank()) "none" else "set"}")
 
-                val bridge = InferenceBridge()
+                val bridge = InferenceBridge(this@LocalApiService)
+                inferenceBridge = bridge
                 val newServer = LocalApiServer(bridge, apiKey)
 
                 Log.d(TAG, "Step 1: Calling newServer.start($port)...")
@@ -194,15 +218,13 @@ class LocalApiService : Service() {
                         }
                         Log.d(TAG, "Step 2: Model file exists, size=${modelFile.length()} bytes")
 
-                        // Use the accelerator from the UI config. Save original to restore later.
-                        val originalAccelerator = model.configValues.toMutableMap().let {
-                            it[ConfigKeys.ACCELERATOR.label]
-                        }
-                        Log.d(TAG, "Step 2: Original accelerator = $originalAccelerator, using $accelerator")
-
-                        // Override accelerator to the user's choice
+                        // Override accelerator and sampler parameters to the user's choice
                         val mutableConfig = model.configValues.toMutableMap()
                         mutableConfig[ConfigKeys.ACCELERATOR.label] = accelerator
+                        mutableConfig[ConfigKeys.TEMPERATURE.label] = temperature.toString()
+                        mutableConfig[ConfigKeys.TOPP.label] = topP.toString()
+                        mutableConfig[ConfigKeys.TOPK.label] = topK.toString()
+                        mutableConfig[ConfigKeys.MAX_TOKENS.label] = maxTokens.toString()
                         model.configValues = mutableConfig
 
                         // Initialize the model — catch Throwable to handle native errors.
@@ -218,20 +240,7 @@ class LocalApiService : Service() {
                             )
                         } catch (t: Throwable) {
                             Log.e(TAG, "Step 2: NATIVE CRASH caught in initialize()", t)
-                            // Restore original accelerator
-                            if (originalAccelerator != null) {
-                                val restoreConfig = model.configValues.toMutableMap()
-                                restoreConfig[ConfigKeys.ACCELERATOR.label] = originalAccelerator
-                                model.configValues = restoreConfig
-                            }
                             throw Exception("Native engine crash: ${t.message}")
-                        }
-
-                        // Restore original accelerator value
-                        if (originalAccelerator != null) {
-                            val restoreConfig = model.configValues.toMutableMap()
-                            restoreConfig[ConfigKeys.ACCELERATOR.label] = originalAccelerator
-                            model.configValues = restoreConfig
                         }
 
                         if (initError.isNotEmpty()) {
@@ -319,6 +328,10 @@ class LocalApiService : Service() {
                 stopSelf()
             }
         }
+    }
+
+    fun stopCurrentSession() {
+        inferenceBridge?.stopCurrentSession()
     }
 
     private fun getLocalIpAddress(): String? {
